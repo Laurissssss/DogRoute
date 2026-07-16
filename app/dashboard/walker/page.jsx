@@ -87,6 +87,7 @@ export default function WalkerDashboard() {
 
   // Fetch all initial data
   useEffect(() => {
+    let offersChannel = null;
     const fetchData = async () => {
       try {
         setIsLoading(true);
@@ -122,7 +123,7 @@ export default function WalkerDashboard() {
           setCompletedCount(statsData.length);
         }
 
-        // 4. Fetch incoming walk offers (status = 'requested')
+        // 4. Fetch incoming walk offers (status = 'requested' and targeted to this walker)
         const { data: offersData, error: offersError } = await supabase
           .from("walks")
           .select(`
@@ -144,10 +145,78 @@ export default function WalkerDashboard() {
               avatar_url
             )
           `)
-          .eq("status", "requested");
+          .eq("status", "requested")
+          .eq("walker_id", user.id);
         
         if (offersError) throw offersError;
         setOffers(offersData || []);
+
+        // 5. Suscribirse en tiempo real a las ofertas para este walker
+        offersChannel = supabase
+          .channel(`walker-offers-${user.id}`)
+          .on(
+            "postgres_changes",
+            {
+              event: "*",
+              schema: "public",
+              table: "walks",
+              filter: `walker_id=eq.${user.id}`,
+            },
+            async (payload) => {
+              console.log("Realtime walk change event:", payload);
+              if (payload.eventType === "INSERT") {
+                // Fetch dog and client details for the new walk
+                const { data: newWalk, error } = await supabase
+                  .from("walks")
+                  .select(`
+                    id,
+                    price,
+                    duration_mins,
+                    client_id,
+                    latitude,
+                    longitude,
+                    created_at,
+                    dog:dog_id (
+                      name,
+                      breed,
+                      size,
+                      photo_url
+                    ),
+                    client:client_id (
+                      full_name,
+                      avatar_url
+                    )
+                  `)
+                  .eq("id", payload.new.id)
+                  .single();
+
+                if (!error && newWalk && newWalk.status === "requested") {
+                  setOffers((prev) => {
+                    if (prev.some(o => o.id === newWalk.id)) return prev;
+                    return [newWalk, ...prev];
+                  });
+                }
+              } else if (payload.eventType === "UPDATE") {
+                const updatedWalk = payload.new;
+                if (updatedWalk.status !== "requested") {
+                  // Si ya no está en estado requested (ej: aceptado, pagado, cancelado), quitar de la lista
+                  setOffers((prev) => prev.filter(o => o.id !== updatedWalk.id));
+                } else {
+                  // Si se actualiza el precio u otro campo y sigue solicitado
+                  setOffers((prev) =>
+                    prev.map((o) =>
+                      o.id === updatedWalk.id
+                        ? { ...o, price: updatedWalk.price, duration_mins: updatedWalk.duration_mins }
+                        : o
+                    )
+                  );
+                }
+              } else if (payload.eventType === "DELETE") {
+                setOffers((prev) => prev.filter((o) => o.id !== payload.old.id));
+              }
+            }
+          )
+          .subscribe();
 
       } catch (err) {
         console.error("Error loading walker dashboard:", err);
@@ -158,6 +227,12 @@ export default function WalkerDashboard() {
     };
 
     fetchData();
+
+    return () => {
+      if (offersChannel) {
+        supabase.removeChannel(offersChannel);
+      }
+    };
   }, [router]);
 
   // Handle accepting a walk
