@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 import { 
@@ -17,7 +18,8 @@ import {
   AlertCircle, 
   BellRing,
   Dog,
-  LogOut
+  LogOut,
+  Settings
 } from "lucide-react";
 
 export default function WalkerDashboard() {
@@ -279,6 +281,17 @@ export default function WalkerDashboard() {
 
   return (
     <div className="relative min-h-screen bg-[#0b0f19] text-white overflow-x-hidden font-sans pb-24">
+      {/* Settings Floating Button */}
+      <div className="absolute top-6 right-6 z-40">
+        <Link
+          href="/dashboard/walker/profile"
+          className="flex items-center justify-center w-11 h-11 rounded-full bg-slate-900 border border-slate-800 hover:border-violet-500/50 text-slate-400 hover:text-violet-400 hover:rotate-45 transition-all duration-300 shadow-lg shadow-black/20 cursor-pointer"
+          title="Editar Perfil"
+        >
+          <Settings className="w-5 h-5" />
+        </Link>
+      </div>
+
       {/* Aurora Ambient Background Glows */}
       <div className="absolute top-[-10%] left-[-10%] w-[40vw] h-[40vw] rounded-full bg-emerald-600/10 blur-[100px] pointer-events-none" />
       <div className="absolute bottom-[20%] right-[-10%] w-[40vw] h-[40vw] rounded-full bg-violet-500/5 blur-[100px] pointer-events-none" />

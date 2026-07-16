@@ -28,6 +28,7 @@ export default function OwnerDashboard() {
   const [userProfile, setUserProfile] = useState(null);
   const [dogs, setDogs] = useState([]);
   const [walkers, setWalkers] = useState([]);
+  const [activeWalk, setActiveWalk] = useState(null);
   
   // UI states
   const [isLoading, setIsLoading] = useState(true);
@@ -51,6 +52,7 @@ export default function OwnerDashboard() {
 
   // Fetch all initial data
   useEffect(() => {
+    let clientWalksChannel = null;
     const fetchData = async () => {
       try {
         setIsLoading(true);
@@ -95,6 +97,82 @@ export default function OwnerDashboard() {
         const activeWalkers = (walkersData || []).filter(w => w.bio && w.hourly_rate);
         setWalkers(activeWalkers);
 
+        // 5. Fetch client's current active walk (if any)
+        const { data: activeWalksData, error: activeWalksError } = await supabase
+          .from("walks")
+          .select(`
+            *,
+            dog:dog_id (name, breed),
+            walker:walker_id (full_name)
+          `)
+          .eq("client_id", user.id)
+          .in("status", ["requested", "accepted", "paid", "ongoing"])
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        
+        if (activeWalksError) throw activeWalksError;
+        setActiveWalk(activeWalksData || null);
+
+        // 6. Suscribirse en tiempo real a cambios en las solicitudes de este cliente
+        clientWalksChannel = supabase
+          .channel(`client-walks-${user.id}`)
+          .on(
+            "postgres_changes",
+            {
+              event: "*",
+              schema: "public",
+              table: "walks",
+              filter: `client_id=eq.${user.id}`,
+            },
+            async (payload) => {
+              console.log("Realtime walk change event on owner dashboard:", payload);
+              if (payload.eventType === "INSERT") {
+                const newWalk = payload.new;
+                if (["requested", "accepted", "paid", "ongoing"].includes(newWalk.status)) {
+                  // Fetch relationships
+                  const { data: fullWalk, error: walkErr } = await supabase
+                    .from("walks")
+                    .select(`
+                      *,
+                      dog:dog_id (name, breed),
+                      walker:walker_id (full_name)
+                    `)
+                    .eq("id", newWalk.id)
+                    .single();
+                  
+                  if (!walkErr && fullWalk) {
+                    setActiveWalk(fullWalk);
+                  }
+                }
+              } else if (payload.eventType === "UPDATE") {
+                const updatedWalk = payload.new;
+                if (["requested", "accepted", "paid", "ongoing"].includes(updatedWalk.status)) {
+                  // Fetch relationships
+                  const { data: fullWalk, error: walkErr } = await supabase
+                    .from("walks")
+                    .select(`
+                      *,
+                      dog:dog_id (name, breed),
+                      walker:walker_id (full_name)
+                    `)
+                    .eq("id", updatedWalk.id)
+                    .single();
+                  
+                  if (!walkErr && fullWalk) {
+                    setActiveWalk(fullWalk);
+                  }
+                } else {
+                  // Si pasó a completada o cancelada, remover del panel
+                  setActiveWalk(null);
+                }
+              } else if (payload.eventType === "DELETE") {
+                setActiveWalk(null);
+              }
+            }
+          )
+          .subscribe();
+
       } catch (err) {
         console.error("Error loading dashboard data:", err);
       } finally {
@@ -103,6 +181,12 @@ export default function OwnerDashboard() {
     };
 
     fetchData();
+
+    return () => {
+      if (clientWalksChannel) {
+        supabase.removeChannel(clientWalksChannel);
+      }
+    };
   }, [router]);
 
   const handleCreateWalkRequest = async (e) => {
@@ -189,6 +273,62 @@ export default function OwnerDashboard() {
             </Link>
           </div>
         </div>
+
+        {/* ACTIVE WALK BANNER / CARD */}
+        {activeWalk && (
+          <div className="p-6 bg-gradient-to-br from-[#1c2438] to-[#141b2a] border border-violet-500/30 rounded-2xl backdrop-blur-md space-y-4 animate-fade-in relative z-10">
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+              <div className="flex items-start sm:items-center gap-3">
+                <span className="w-2.5 h-2.5 rounded-full bg-violet-500 animate-pulse shrink-0 mt-1.5 sm:mt-0" />
+                <div>
+                  <h3 className="text-sm font-bold text-white uppercase tracking-wider">Estado de tu Paseo Activo</h3>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    {activeWalk.status === "requested" && `Esperando que ${activeWalk.walker?.full_name || "el paseador"} acepte la oferta para pasear a ${activeWalk.dog?.name}...`}
+                    {activeWalk.status === "accepted" && `¡${activeWalk.walker?.full_name || "El paseador"} aceptó pasear a ${activeWalk.dog?.name}! Procede al pago seguro.`}
+                    {activeWalk.status === "paid" && `Pago confirmado. ${activeWalk.walker?.full_name || "El paseador"} está preparándose para recoger a ${activeWalk.dog?.name}.`}
+                    {activeWalk.status === "ongoing" && `¡${activeWalk.dog?.name} está en su paseo en vivo con ${activeWalk.walker?.full_name || "el paseador"}!`}
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 sm:self-center shrink-0">
+                <span className="text-xs text-slate-500">Tarifa propuesta:</span>
+                <span className="text-sm font-black text-emerald-400">${parseFloat(activeWalk.price).toLocaleString("es-CO")} COP</span>
+              </div>
+            </div>
+            
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 pt-3 border-t border-slate-800/60">
+              <div className="text-xs text-slate-500">
+                Mascota: <strong className="text-white">{activeWalk.dog?.name}</strong> • Duración: <strong className="text-white">{activeWalk.duration_mins} min</strong>
+              </div>
+              <div className="self-end sm:self-center">
+                {activeWalk.status === "accepted" && (
+                  <Link
+                    href="/dashboard/owner/payment"
+                    className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-slate-950 font-black text-xs uppercase tracking-wider transition-all shadow-md shadow-emerald-500/10 cursor-pointer"
+                  >
+                    Proceder al Pago
+                  </Link>
+                )}
+                {activeWalk.status === "paid" && (
+                  <Link
+                    href="/dashboard/owner/active"
+                    className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-slate-900 border border-slate-800 text-slate-350 hover:text-white transition-all text-xs font-bold uppercase tracking-wider cursor-pointer"
+                  >
+                    Ver Mapa de Espera
+                  </Link>
+                )}
+                {activeWalk.status === "ongoing" && (
+                  <Link
+                    href="/dashboard/owner/active"
+                    className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-violet-600 hover:bg-violet-500 text-white font-bold text-xs uppercase tracking-wider transition-all shadow-md shadow-violet-600/10 cursor-pointer animate-pulse"
+                  >
+                    Seguir Ruta en Vivo
+                  </Link>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* SECTION: MY DOGS */}
         <div className="space-y-4">
