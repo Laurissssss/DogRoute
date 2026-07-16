@@ -31,7 +31,7 @@ export default function WalkerDashboard() {
   
   // UI states
   const [isLoading, setIsLoading] = useState(true);
-  const [isAvailable, setIsAvailable] = useState(true); // Availability toggle
+  const [isAvailable, setIsAvailable] = useState(false); // Availability toggle
   const [actionLoadingId, setActionLoadingId] = useState(null);
   const [errorMsg, setErrorMsg] = useState("");
 
@@ -42,6 +42,46 @@ export default function WalkerDashboard() {
       router.push("/");
     } catch (err) {
       console.error("Error logging out:", err);
+    }
+  };
+
+  const handleToggleAvailability = async () => {
+    const nextState = !isAvailable;
+    setIsAvailable(nextState);
+    
+    let latitude = walkerProfile?.latitude || 4.6508;
+    let longitude = walkerProfile?.longitude || -74.0636;
+
+    const updateDB = async (val, latVal, lngVal) => {
+      try {
+        const { error } = await supabase
+          .from("profiles")
+          .update({
+            is_available: val,
+            latitude: val ? latVal : null,
+            longitude: val ? lngVal : null
+          })
+          .eq("id", walkerProfile.id);
+        
+        if (error) throw error;
+      } catch (err) {
+        console.error("Error updating availability in DB:", err);
+        setIsAvailable(!val); // Revert state
+      }
+    };
+
+    if (nextState && navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          updateDB(nextState, position.coords.latitude, position.coords.longitude);
+        },
+        (err) => {
+          console.warn("Geolocation failed, using default coords:", err);
+          updateDB(nextState, latitude, longitude);
+        }
+      );
+    } else {
+      updateDB(nextState, latitude, longitude);
     }
   };
 
@@ -65,6 +105,9 @@ export default function WalkerDashboard() {
           .single();
         
         setWalkerProfile(profile);
+        if (profile) {
+          setIsAvailable(profile.is_available ?? false);
+        }
 
         // 3. Fetch walker's statistics (Completed walks & earnings)
         const { data: statsData } = await supabase
@@ -205,10 +248,10 @@ export default function WalkerDashboard() {
                 Estado:
               </span>
               <button
-                onClick={() => setIsAvailable(!isAvailable)}
-                className={`flex items-center gap-2 px-4 py-2.5 rounded-xl border text-xs font-bold transition-all duration-300 ${
+                onClick={handleToggleAvailability}
+                className={`flex items-center gap-2 px-4 py-2.5 rounded-xl border text-xs font-bold transition-all duration-300 cursor-pointer ${
                   isAvailable 
-                    ? "bg-emerald-500/10 border-emerald-500/50 text-emerald-400 shadow-[0_0_12px_rgba(16,185,129,0.15)]"
+                    ? "bg-emerald-500/10 border-emerald-500/50 text-emerald-450 shadow-[0_0_12px_rgba(16,185,129,0.15)]"
                     : "bg-rose-500/10 border-rose-500/30 text-rose-400"
                 }`}
               >

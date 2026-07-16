@@ -82,11 +82,12 @@ export default function OwnerDashboard() {
           setSelectedDogForWalk(dogsData[0].id); // Auto-select first dog for the request modal
         }
 
-        // 4. Fetch available walkers
+        // 4. Fetch available walkers (must be available and role is walker)
         const { data: walkersData, error: walkersError } = await supabase
           .from("profiles")
           .select("*")
-          .eq("role", "walker");
+          .eq("role", "walker")
+          .eq("is_available", true);
         
         if (walkersError) throw walkersError;
         
@@ -280,19 +281,18 @@ export default function OwnerDashboard() {
 
                 {/* Walker Pins on Map */}
                 {walkers.map((walker, idx) => {
-                  // Static but randomized placements for demo
-                  const positions = [
-                    { top: "25%", left: "30%" },
-                    { top: "60%", left: "70%" },
-                    { top: "35%", left: "65%" },
-                    { top: "70%", left: "25%" },
-                  ];
-                  const pos = positions[idx % positions.length];
+                  // Use real walker coordinates if they exist, otherwise fall back to static slots
+                  const latVal = walker.latitude ? parseFloat(walker.latitude) : 4.6508 + (idx % 2 === 0 ? 0.002 : -0.002);
+                  const lngVal = walker.longitude ? parseFloat(walker.longitude) : -74.0636 + (idx % 3 === 0 ? 0.003 : -0.003);
+                  
+                  // Convert coordinates to map grid percentage
+                  const topPercent = Math.max(10, Math.min(90, 50 + (latVal - 4.6508) * 6000));
+                  const leftPercent = Math.max(10, Math.min(90, 50 + (lngVal - -74.0636) * 6000));
 
                   return (
                     <div 
                       key={walker.id}
-                      style={{ top: pos.top, left: pos.left }}
+                      style={{ top: `${topPercent}%`, left: `${leftPercent}%` }}
                       className="absolute -translate-x-1/2 -translate-y-1/2 flex flex-col items-center cursor-pointer group"
                       onMouseEnter={() => setHoveredWalkerId(walker.id)}
                       onMouseLeave={() => setHoveredWalkerId(null)}
